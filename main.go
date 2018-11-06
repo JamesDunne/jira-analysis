@@ -304,6 +304,8 @@ func main() {
 		//"Approved",
 	}
 
+	timeLayout := time.RFC1123Z
+	fmt.Printf("Now: %s\n", now.Format(timeLayout))
 	for _, status := range keys {
 		statusIssues := IssueList(aging[status])
 		sort.Sort(statusIssues)
@@ -311,7 +313,7 @@ func main() {
 		fmt.Printf("%s: [\n", status)
 		for _, issue := range statusIssues {
 			time.Now().Sub(issue.StatusTime)
-			fmt.Printf("  %s (%d days old since %s)\n", issue.Key, issue.StatusBusinessDays, issue.StatusTime)
+			fmt.Printf("  %s (%d days old since %s)\n", issue.Key, issue.StatusBusinessDays, issue.StatusTime.Format(timeLayout))
 			//if i < len(statusIssues)-1 {
 			//	fmt.Print(", ")
 			//}
