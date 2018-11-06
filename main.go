@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -112,6 +113,23 @@ func (date Date) BusinessDaysUntil(until Date) int {
 	}
 
 	return days
+}
+
+type IssueList []*Issue
+
+func (issues IssueList) Len() int {
+	return len(issues)
+}
+
+// Less reports whether the element with
+// index i should sort before the element with index j.
+func (issues IssueList) Less(i, j int) bool {
+	return issues[i].StatusBusinessDays < issues[j].StatusBusinessDays
+}
+
+// Swap swaps the elements with indexes i and j.
+func (issues IssueList) Swap(i, j int) {
+	issues[i], issues[j] = issues[j], issues[i]
 }
 
 func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
@@ -261,26 +279,30 @@ func main() {
 			continue
 		}
 
-		//statusList := aging[issue.Status]
-		//if statusList == nil {
-		//	statusList = make([]*Issue, 0, 10)
-		//	aging[issue.Status] = statusList
-		//}
-
-		// subtract weekends:
+		// Determine age in business days:
 		issue.StatusBusinessDays = DateOf(issue.StatusTime).BusinessDaysUntil(today)
 
+		// Add to status map:
 		aging[issue.Status] = append(aging[issue.Status], issue)
-
-		//fmt.Printf("%s: in %s since %v\n", issue.Key, issue.Status, issue.StatusTime)
 	}
 
-	for status, statusIssues := range aging {
+	keys := []string{
+		"In Progress",     // In Development
+		"In Progress - 1", // PR
+		"In Progress - 2", // Ready for QA
+		"In Testing",      // In Testing
+		//"Approved",
+	}
+
+	for _, status := range keys {
+		statusIssues := IssueList(aging[status])
+		sort.Sort(statusIssues)
+
 		fmt.Printf("%s: [", status)
 		for i, issue := range statusIssues {
 			time.Now().Sub(issue.StatusTime)
 			fmt.Printf("%s (%d)", issue.Key, issue.StatusBusinessDays)
-			if i < len(statusIssues) - 1 {
+			if i < len(statusIssues)-1 {
 				fmt.Print(", ")
 			}
 		}
