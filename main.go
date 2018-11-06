@@ -114,6 +114,62 @@ func (date Date) BusinessDaysUntil(until Date) int {
 	return days
 }
 
+func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
+	stat, statErr := os.Stat(cacheFilename)
+
+	cacheHit := statErr == nil || !os.IsNotExist(statErr)
+	if cacheHit && stat != nil {
+		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
+			cacheHit = false
+		}
+	}
+
+	if cacheHit {
+		b, err := ioutil.ReadFile(cacheFilename)
+		if err != nil {
+			cacheHit = false
+		} else {
+			issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+			return issuesJsonBody, nil
+		}
+	}
+
+	if !cacheHit {
+		var req *http.Request
+		req, err = http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		req.SetBasicAuth(os.ExpandEnv("$JIRA_USERNAME"), os.ExpandEnv("$JIRA_PASSWORD"))
+
+		var rsp *http.Response
+		rsp, err = cl.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if rsp.StatusCode >= 300 {
+			//log.Fatalf("status = %d", rsp.StatusCode)
+			return nil, errors.Errorf("HTTP response %s", rsp.Status)
+		}
+
+		var b []byte
+		b, err = ioutil.ReadAll(rsp.Body)
+		if err != nil {
+			return nil, err
+		}
+		rsp.Body.Close()
+
+		// cache response in file:
+		ioutil.WriteFile(cacheFilename, b, 0600)
+
+		issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+
+		return issuesJsonBody, nil
+	}
+
+	return
+}
+
 func main() {
 	args := os.Args[1:]
 
@@ -230,60 +286,4 @@ func main() {
 		}
 		fmt.Printf("]\n")
 	}
-}
-
-func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
-	stat, statErr := os.Stat(cacheFilename)
-
-	cacheHit := statErr == nil || !os.IsNotExist(statErr)
-	if cacheHit && stat != nil {
-		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
-			cacheHit = false
-		}
-	}
-
-	if cacheHit {
-		b, err := ioutil.ReadFile(cacheFilename)
-		if err != nil {
-			cacheHit = false
-		} else {
-			issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
-			return issuesJsonBody, nil
-		}
-	}
-
-	if !cacheHit {
-		var req *http.Request
-		req, err = http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			log.Fatal(err)
-		}
-		req.SetBasicAuth(os.ExpandEnv("$JIRA_USERNAME"), os.ExpandEnv("$JIRA_PASSWORD"))
-
-		var rsp *http.Response
-		rsp, err = cl.Do(req)
-		if err != nil {
-			return nil, err
-		}
-		if rsp.StatusCode >= 300 {
-			//log.Fatalf("status = %d", rsp.StatusCode)
-			return nil, errors.Errorf("HTTP response %s", rsp.Status)
-		}
-
-		var b []byte
-		b, err = ioutil.ReadAll(rsp.Body)
-		if err != nil {
-			return nil, err
-		}
-		rsp.Body.Close()
-
-		// cache response in file:
-		ioutil.WriteFile(cacheFilename, b, 0600)
-
-		issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
-
-		return issuesJsonBody, nil
-	}
-
-	return
 }
