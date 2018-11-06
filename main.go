@@ -63,6 +63,12 @@ type Issue struct {
 	Id        string         `json:"id"`
 	Key       string         `json:"key"`
 	Changelog PagedChangelog `json:"changelog"`
+
+	// computed:
+	Status             string
+	StatusTime         time.Time
+	Assigned           User
+	StatusBusinessDays int
 }
 
 type PagedIssues struct {
@@ -70,6 +76,42 @@ type PagedIssues struct {
 	MaxResults int     `json:"maxResults"`
 	Total      int     `json:"total"`
 	Issues     []Issue `json:"issues"`
+}
+
+type Date struct {
+	time.Time
+}
+
+func dateOf(t time.Time) Date {
+	y, m, d := t.Date()
+	l := t.Location()
+	return Date{time.Date(y, m, d, 0, 0, 0, 0, l)}
+}
+
+func (date Date) NextDate() Date {
+	return dateOf(date.Time.Add(25 * time.Hour))
+}
+
+func (date Date) BusinessDaysUntil(until Date) int {
+	d := date
+
+	// Count weekdays, skipping weekends:
+	days := 0
+	for d.Time.Before(until.Time) {
+		if d.Time.Weekday() == time.Saturday {
+			d = d.NextDate()
+		}
+		if d.Time.Weekday() == time.Sunday {
+			d = d.NextDate()
+		}
+
+		if d.Time.Before(until.Time) {
+			d = d.NextDate()
+			days++
+		}
+	}
+
+	return days
 }
 
 func main() {
@@ -132,10 +174,17 @@ func main() {
 		issues = append(issues, pagedIssues.Issues...)
 	}
 
-	// Evaluate latest status per issue:
-	for _, issue := range issues {
-		issueStatus := ""
-		issueStatusTime := time.Unix(0, 0)
+	now := time.Now()
+	today := dateOf(now)
+
+	// Discover latest status per issue:
+	aging := make(map[string][]*Issue)
+	for i := range issues {
+		issue := &issues[i]
+
+		issue.Status = ""
+		issue.StatusTime = time.Unix(0, 0)
+
 		for _, history := range issue.Changelog.Histories {
 			for _, item := range history.Items {
 				// Ignore any histories except status changes:
@@ -143,12 +192,43 @@ func main() {
 					continue
 				}
 
-				issueStatus = item.ToString
-				issueStatusTime = history.Created.Time
+				issue.Status = item.ToString
+				issue.StatusTime = history.Created.Time
+				issue.Assigned = history.Author
 			}
 		}
 
-		fmt.Printf("%s: in %s since %v\n", issue.Key, issueStatus, issueStatusTime)
+		if issue.Status == "" {
+			continue
+		}
+		if issue.Status == "Open" || issue.Status == "Reopened" || issue.Status == "Closed" {
+			continue
+		}
+
+		//statusList := aging[issue.Status]
+		//if statusList == nil {
+		//	statusList = make([]*Issue, 0, 10)
+		//	aging[issue.Status] = statusList
+		//}
+
+		// subtract weekends:
+		issue.StatusBusinessDays = dateOf(issue.StatusTime).BusinessDaysUntil(today)
+
+		aging[issue.Status] = append(aging[issue.Status], issue)
+
+		//fmt.Printf("%s: in %s since %v\n", issue.Key, issue.Status, issue.StatusTime)
+	}
+
+	for status, statusIssues := range aging {
+		fmt.Printf("%s: [", status)
+		for i, issue := range statusIssues {
+			time.Now().Sub(issue.StatusTime)
+			fmt.Printf("%s (%d)", issue.Key, issue.StatusBusinessDays)
+			if i < len(statusIssues) - 1 {
+				fmt.Print(", ")
+			}
+		}
+		fmt.Printf("]\n")
 	}
 }
 
