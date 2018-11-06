@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -94,23 +97,51 @@ func main() {
 		},
 	}
 
-	url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/issue?fields=changelog&expand=changelog", jiraUrl, boardId)
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	req.SetBasicAuth(jiraUsername, jiraPassword)
+	var issuesJsonBody io.ReadCloser
 
-	rsp, err := cl.Do(req)
-	if err != nil {
-		log.Fatal(err)
+	cacheFilename := "board.json"
+
+	_, err := os.Stat(cacheFilename)
+	cacheHit := err == nil || !os.IsNotExist(err)
+	if cacheHit {
+		b, err := ioutil.ReadFile(cacheFilename)
+		if err != nil {
+			cacheHit = false
+		} else {
+			issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+		}
 	}
-	if rsp.StatusCode >= 300 {
-		log.Fatalf("status = %d", rsp.StatusCode)
+
+	if !cacheHit {
+		url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/issue?fields=changelog&expand=changelog", jiraUrl, boardId)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			log.Fatal(err)
+		}
+		req.SetBasicAuth(jiraUsername, jiraPassword)
+
+		rsp, err := cl.Do(req)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if rsp.StatusCode >= 300 {
+			log.Fatalf("status = %d", rsp.StatusCode)
+		}
+
+		b, err := ioutil.ReadAll(rsp.Body)
+		if err != nil {
+			log.Fatal(err)
+		}
+		rsp.Body.Close()
+
+		// cache response in file:
+		ioutil.WriteFile(cacheFilename, b, 0600)
+
+		issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
 	}
 
 	pagedIssues := &PagedIssues{}
-	dec := json.NewDecoder(rsp.Body)
+	dec := json.NewDecoder(issuesJsonBody)
 	err = dec.Decode(pagedIssues)
 	if err != nil {
 		log.Fatal(err)
