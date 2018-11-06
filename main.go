@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
@@ -30,45 +31,45 @@ func (t *zonedTimestamp) UnmarshalJSON(buf []byte) error {
 }
 
 type User struct {
-	UserName string `json:"name"`
+	UserName     string `json:"name"`
 	EmailAddress string `json:"emailAddress"`
-	DisplayName string `json:"displayName"`
-	TimeZone string `json:"timeZone"`
+	DisplayName  string `json:"displayName"`
+	TimeZone     string `json:"timeZone"`
 }
 
 type HistoryItem struct {
-	Field string `json:"field"`
-	From string `json:"from"`
+	Field      string `json:"field"`
+	From       string `json:"from"`
 	FromString string `json:"fromString"`
-	To string `json:"to"`
-	ToString string `json:"toString"`
+	To         string `json:"to"`
+	ToString   string `json:"toString"`
 }
 
 type History struct {
-	Id string `json:"id"`
-	Author User `json:"author"`
+	Id      string         `json:"id"`
+	Author  User           `json:"author"`
 	Created zonedTimestamp `json:"created"`
-	Items []HistoryItem `json:"items"`
+	Items   []HistoryItem  `json:"items"`
 }
 
 type PagedChangelog struct {
-	StartAt int `json:"startAt"`
-	MaxResults int `json:"maxResults"`
-	Total int `json:"total"`
-	Histories []History `json:"histories"`
+	StartAt    int       `json:"startAt"`
+	MaxResults int       `json:"maxResults"`
+	Total      int       `json:"total"`
+	Histories  []History `json:"histories"`
 }
 
 type Issue struct {
-	Id string `json:"id"`
-	Key string `json:"key"`
+	Id        string         `json:"id"`
+	Key       string         `json:"key"`
 	Changelog PagedChangelog `json:"changelog"`
 }
 
 type PagedIssues struct {
-	StartAt int `json:"startAt"`
-	MaxResults int `json:"maxResults"`
-	Total int `json:"total"`
-	Issues []Issue `json:"issues"`
+	StartAt    int     `json:"startAt"`
+	MaxResults int     `json:"maxResults"`
+	Total      int     `json:"total"`
+	Issues     []Issue `json:"issues"`
 }
 
 func main() {
@@ -86,9 +87,6 @@ func main() {
 		os.Setenv("JIRA_URL", "https://ultidev")
 	}
 
-	jiraUsername := os.Getenv("JIRA_USERNAME")
-	jiraPassword := os.Getenv("JIRA_PASSWORD")
-
 	cl := &http.Client{
 		// Disable TLS cert verification:
 		Transport: &http.Transport{
@@ -96,46 +94,106 @@ func main() {
 		},
 	}
 
-	var issuesJsonBody io.ReadCloser
+	var issues []Issue
+	startAt := 0
+	total := 1
 
-	cacheFilename := "board.json"
+	for startAt < total {
+		cacheFilename := fmt.Sprintf("board.%d.issue.%d.json", boardId, startAt)
 
-	stat, err := os.Stat(cacheFilename)
-	cacheHit := err == nil || !os.IsNotExist(err)
+		jiraUrl := os.ExpandEnv("$JIRA_URL/rest/agile/1.0/board")
+		url := fmt.Sprintf("%s/%d/issue?fields=changelog&expand=changelog&startAt=%d", jiraUrl, boardId, startAt)
+
+		// Fetch from cache or network:
+		issuesJsonBody, err := cachedGet(cacheFilename, url, cl)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Decode list of issues:
+		pagedIssues := &PagedIssues{}
+		dec := json.NewDecoder(issuesJsonBody)
+		err = dec.Decode(pagedIssues)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		//fmt.Printf("%+v\n", pagedIssues)
+
+		// Advance to next page:
+		total = pagedIssues.Total
+		startAt = pagedIssues.StartAt + len(pagedIssues.Issues)
+
+		if issues == nil {
+			issues = make([]Issue, 0, pagedIssues.Total)
+		}
+
+		// Append page:
+		issues = append(issues, pagedIssues.Issues...)
+	}
+
+	// Evaluate latest status per issue:
+	for _, issue := range issues {
+		issueStatus := ""
+		issueStatusTime := time.Unix(0, 0)
+		for _, history := range issue.Changelog.Histories {
+			for _, item := range history.Items {
+				// Ignore any histories except status changes:
+				if item.Field != "status" {
+					continue
+				}
+
+				issueStatus = item.ToString
+				issueStatusTime = history.Created.Time
+			}
+		}
+
+		fmt.Printf("%s: in %s since %v\n", issue.Key, issueStatus, issueStatusTime)
+	}
+}
+
+func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
+	stat, statErr := os.Stat(cacheFilename)
+
+	cacheHit := statErr == nil || !os.IsNotExist(statErr)
 	if cacheHit && stat != nil {
 		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
 			cacheHit = false
 		}
 	}
+
 	if cacheHit {
 		b, err := ioutil.ReadFile(cacheFilename)
 		if err != nil {
 			cacheHit = false
 		} else {
 			issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+			return issuesJsonBody, nil
 		}
 	}
 
 	if !cacheHit {
-		urlfmt := os.ExpandEnv("$JIRA_URL/rest/agile/1.0/board/%d/issue?fields=changelog&expand=changelog")
-		url := fmt.Sprintf(urlfmt, boardId)
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		var req *http.Request
+		req, err = http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
-		req.SetBasicAuth(jiraUsername, jiraPassword)
+		req.SetBasicAuth(os.ExpandEnv("$JIRA_USERNAME"), os.ExpandEnv("$JIRA_PASSWORD"))
 
-		rsp, err := cl.Do(req)
+		var rsp *http.Response
+		rsp, err = cl.Do(req)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		if rsp.StatusCode >= 300 {
-			log.Fatalf("status = %d", rsp.StatusCode)
+			//log.Fatalf("status = %d", rsp.StatusCode)
+			return nil, errors.Errorf("HTTP response %s", rsp.Status)
 		}
 
-		b, err := ioutil.ReadAll(rsp.Body)
+		var b []byte
+		b, err = ioutil.ReadAll(rsp.Body)
 		if err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 		rsp.Body.Close()
 
@@ -143,14 +201,9 @@ func main() {
 		ioutil.WriteFile(cacheFilename, b, 0600)
 
 		issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+
+		return issuesJsonBody, nil
 	}
 
-	pagedIssues := &PagedIssues{}
-	dec := json.NewDecoder(issuesJsonBody)
-	err = dec.Decode(pagedIssues)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("%+v\n", pagedIssues)
+	return
 }
