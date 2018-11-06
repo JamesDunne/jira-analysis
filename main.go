@@ -82,14 +82,14 @@ type Date struct {
 	time.Time
 }
 
-func dateOf(t time.Time) Date {
+func DateOf(t time.Time) Date {
 	y, m, d := t.Date()
 	l := t.Location()
 	return Date{time.Date(y, m, d, 0, 0, 0, 0, l)}
 }
 
 func (date Date) NextDate() Date {
-	return dateOf(date.Time.Add(25 * time.Hour))
+	return DateOf(date.Time.Add(25 * time.Hour))
 }
 
 func (date Date) BusinessDaysUntil(until Date) int {
@@ -231,7 +231,7 @@ func main() {
 	}
 
 	now := time.Now()
-	today := dateOf(now)
+	today := DateOf(now)
 
 	// Discover latest status per issue:
 	aging := make(map[string][]*Issue)
@@ -268,7 +268,7 @@ func main() {
 		//}
 
 		// subtract weekends:
-		issue.StatusBusinessDays = dateOf(issue.StatusTime).BusinessDaysUntil(today)
+		issue.StatusBusinessDays = DateOf(issue.StatusTime).BusinessDaysUntil(today)
 
 		aging[issue.Status] = append(aging[issue.Status], issue)
 
