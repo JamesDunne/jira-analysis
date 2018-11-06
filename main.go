@@ -298,13 +298,13 @@ func main() {
 		statusIssues := IssueList(aging[status])
 		sort.Sort(statusIssues)
 
-		fmt.Printf("%s: [", status)
-		for i, issue := range statusIssues {
+		fmt.Printf("%s: [\n", status)
+		for _, issue := range statusIssues {
 			time.Now().Sub(issue.StatusTime)
-			fmt.Printf("%s (%d)", issue.Key, issue.StatusBusinessDays)
-			if i < len(statusIssues)-1 {
-				fmt.Print(", ")
-			}
+			fmt.Printf("  %s (%d days old since %s)\n", issue.Key, issue.StatusBusinessDays, issue.StatusTime)
+			//if i < len(statusIssues)-1 {
+			//	fmt.Print(", ")
+			//}
 		}
 		fmt.Printf("]\n")
 	}
