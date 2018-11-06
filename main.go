@@ -82,13 +82,12 @@ func main() {
 		}
 	}
 
-	jiraUrl := os.Getenv("JIRA_URL")
+	if os.Getenv("JIRA_URL") == "" {
+		os.Setenv("JIRA_URL", "https://ultidev")
+	}
+
 	jiraUsername := os.Getenv("JIRA_USERNAME")
 	jiraPassword := os.Getenv("JIRA_PASSWORD")
-
-	if jiraUrl == "" {
-		jiraUrl = "https://ultidev"
-	}
 
 	cl := &http.Client{
 		// Disable TLS cert verification:
@@ -101,8 +100,13 @@ func main() {
 
 	cacheFilename := "board.json"
 
-	_, err := os.Stat(cacheFilename)
+	stat, err := os.Stat(cacheFilename)
 	cacheHit := err == nil || !os.IsNotExist(err)
+	if cacheHit && stat != nil {
+		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
+			cacheHit = false
+		}
+	}
 	if cacheHit {
 		b, err := ioutil.ReadFile(cacheFilename)
 		if err != nil {
@@ -113,7 +117,8 @@ func main() {
 	}
 
 	if !cacheHit {
-		url := fmt.Sprintf("%s/rest/agile/1.0/board/%d/issue?fields=changelog&expand=changelog", jiraUrl, boardId)
+		urlfmt := os.ExpandEnv("$JIRA_URL/rest/agile/1.0/board/%d/issue?fields=changelog&expand=changelog")
+		url := fmt.Sprintf(urlfmt, boardId)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
 			log.Fatal(err)
