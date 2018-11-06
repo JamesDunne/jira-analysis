@@ -84,9 +84,12 @@ type Date struct {
 }
 
 func DateOf(t time.Time) Date {
-	y, m, d := t.Date()
+	// Grab local date:
+	//_, zoneOffset := t.Zone()
 	l := t.Location()
-	return Date{time.Date(y, m, d, 0, 0, 0, 0, l)}
+	y, m, d := t.Date()
+	// Build new date:
+	return Date{time.Date(y, m, d, 6, 0, 0, 0, l)}
 }
 
 func (date Date) NextDate() Date {
@@ -94,23 +97,30 @@ func (date Date) NextDate() Date {
 }
 
 func (date Date) BusinessDaysUntil(until Date) int {
-	d := date
-
 	// Count weekdays, skipping weekends:
 	days := 0
-	for d.Time.Before(until.Time) {
+	d := date
+
+	_, startOffset := date.Zone()
+	_, untilOffset := until.Zone()
+	untilTime := until.In(date.Location()).Add(time.Duration(untilOffset - startOffset) * time.Second)
+	//fmt.Printf("from %s to %s\n", date.Time, untilTime)
+
+	for d.Time.Before(untilTime) {
+		//fmt.Printf("  %d %s\n", days, d)
+
+		days++
+		d = d.NextDate()
+
 		if d.Time.Weekday() == time.Saturday {
 			d = d.NextDate()
 		}
 		if d.Time.Weekday() == time.Sunday {
 			d = d.NextDate()
 		}
-
-		if d.Time.Before(until.Time) {
-			d = d.NextDate()
-			days++
-		}
 	}
+
+	//fmt.Printf("  %d %s\n", days, d)
 
 	return days
 }
