@@ -60,9 +60,14 @@ type PagedChangelog struct {
 	Histories  []History `json:"histories"`
 }
 
+type IssueFields struct {
+	Summary string `json:"summary"`
+}
+
 type Issue struct {
 	Id        string         `json:"id"`
 	Key       string         `json:"key"`
+	Fields    IssueFields    `json:"fields"`
 	Changelog PagedChangelog `json:"changelog"`
 
 	// computed:
@@ -103,7 +108,7 @@ func (date Date) BusinessDaysUntil(until Date) int {
 
 	_, startOffset := date.Zone()
 	_, untilOffset := until.Zone()
-	untilTime := until.In(date.Location()).Add(time.Duration(untilOffset - startOffset) * time.Second)
+	untilTime := until.In(date.Location()).Add(time.Duration(untilOffset-startOffset) * time.Second)
 	//fmt.Printf("from %s to %s\n", date.Time, untilTime)
 
 	for d.Time.Before(untilTime) {
@@ -134,7 +139,7 @@ func (issues IssueList) Len() int {
 // Less reports whether the element with
 // index i should sort before the element with index j.
 func (issues IssueList) Less(i, j int) bool {
-	return issues[i].StatusBusinessDays < issues[j].StatusBusinessDays
+	return issues[i].StatusBusinessDays > issues[j].StatusBusinessDays
 }
 
 // Swap swaps the elements with indexes i and j.
@@ -147,9 +152,9 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 
 	cacheHit := statErr == nil || !os.IsNotExist(statErr)
 	if cacheHit && stat != nil {
-		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
-			cacheHit = false
-		}
+		//if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
+		//	cacheHit = false
+		//}
 	}
 
 	if cacheHit {
@@ -228,7 +233,7 @@ func main() {
 		cacheFilename := fmt.Sprintf("board.%d.issue.%d.json", boardId, startAt)
 
 		jiraUrl := os.ExpandEnv("$JIRA_URL/rest/agile/1.0/board")
-		url := fmt.Sprintf("%s/%d/issue?fields=changelog&expand=changelog&startAt=%d", jiraUrl, boardId, startAt)
+		url := fmt.Sprintf("%s/%d/issue?expand=changelog&startAt=%d", jiraUrl, boardId, startAt)
 
 		// Fetch from cache or network:
 		issuesJsonBody, err := cachedGet(cacheFilename, url, cl)
@@ -263,6 +268,7 @@ func main() {
 
 	// Discover latest status per issue:
 	aging := make(map[string][]*Issue)
+issue:
 	for i := range issues {
 		issue := &issues[i]
 
@@ -271,7 +277,11 @@ func main() {
 
 		for _, history := range issue.Changelog.Histories {
 			for _, item := range history.Items {
-				// Ignore any histories except status changes:
+				if item.Field == "Epic Name" {
+					// Skip this issue since it is an epic:
+					continue issue
+				}
+				// Ignore any fields except status changes:
 				if item.Field != "status" {
 					continue
 				}
@@ -303,20 +313,30 @@ func main() {
 		"In Testing",      // In Testing
 		//"Approved",
 	}
+	names := map[string]string{
+		"In Progress":     "In Development",
+		"In Progress - 1": "PR",
+		"In Progress - 2": "Ready for QA",
+		"In Testing":      "In Testing",
+	}
 
-	timeLayout := time.RFC1123Z
+	timeLayout := "Mon Jan 02"
 	fmt.Printf("Now: %s\n", now.Format(timeLayout))
 	for _, status := range keys {
 		statusIssues := IssueList(aging[status])
 		sort.Sort(statusIssues)
 
-		fmt.Printf("%s: [\n", status)
+		fmt.Printf("%s: [\n", names[status])
 		for _, issue := range statusIssues {
 			time.Now().Sub(issue.StatusTime)
-			fmt.Printf("  %s (%d days old since %s)\n", issue.Key, issue.StatusBusinessDays, issue.StatusTime.Format(timeLayout))
-			//if i < len(statusIssues)-1 {
-			//	fmt.Print(", ")
-			//}
+			fmt.Printf(
+				"  %12s: %s (%2d days old since %s); %s\n",
+				issue.Assigned.UserName,
+				issue.Key,
+				issue.StatusBusinessDays,
+				issue.StatusTime.Format(timeLayout),
+				issue.Fields.Summary,
+			)
 		}
 		fmt.Printf("]\n")
 	}
