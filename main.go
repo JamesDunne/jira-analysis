@@ -148,23 +148,39 @@ func (issues IssueList) Swap(i, j int) {
 }
 
 func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
+	log.Printf("GET '%s'\n", url)
+
 	stat, statErr := os.Stat(cacheFilename)
 
 	cacheHit := statErr == nil || !os.IsNotExist(statErr)
+	cacheAvailable := cacheHit
 	if cacheHit && stat != nil {
-		//if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
-		//	cacheHit = false
-		//}
+		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
+			cacheHit = false
+		}
+	}
+
+	respondCache := func() io.ReadCloser {
+		if !cacheAvailable {
+			return nil
+		}
+
+		b, err := ioutil.ReadFile(cacheFilename)
+		if err != nil {
+			return nil
+		}
+
+		log.Printf("cached response\n")
+		issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+		return issuesJsonBody
 	}
 
 	if cacheHit {
-		b, err := ioutil.ReadFile(cacheFilename)
-		if err != nil {
-			cacheHit = false
-		} else {
-			issuesJsonBody = ioutil.NopCloser(bytes.NewReader(b))
+		issuesJsonBody = respondCache()
+		if issuesJsonBody != nil {
 			return issuesJsonBody, nil
 		}
+		cacheHit = false
 	}
 
 	if !cacheHit {
@@ -178,19 +194,38 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 		var rsp *http.Response
 		rsp, err = cl.Do(req)
 		if err != nil {
+			issuesJsonBody = respondCache()
+			if issuesJsonBody != nil {
+				return issuesJsonBody, nil
+			}
+
+			log.Printf("http: %v\n", err)
 			return nil, err
 		}
+		defer rsp.Body.Close()
+
 		if rsp.StatusCode >= 300 {
-			//log.Fatalf("status = %d", rsp.StatusCode)
-			return nil, errors.Errorf("HTTP response %s", rsp.Status)
+			log.Printf("http: status %s\n", rsp.Status)
+
+			issuesJsonBody = respondCache()
+			if issuesJsonBody != nil {
+				return issuesJsonBody, nil
+			}
+
+			httpErr := errors.Errorf("HTTP response %s", rsp.Status)
+			return nil, httpErr
 		}
 
 		var b []byte
 		b, err = ioutil.ReadAll(rsp.Body)
 		if err != nil {
+			issuesJsonBody = respondCache()
+			if issuesJsonBody != nil {
+				return issuesJsonBody, nil
+			}
+
 			return nil, err
 		}
-		rsp.Body.Close()
 
 		// cache response in file:
 		ioutil.WriteFile(cacheFilename, b, 0600)
@@ -248,8 +283,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-
-		//fmt.Printf("%+v\n", pagedIssues)
 
 		// Advance to next page:
 		total = pagedIssues.Total
