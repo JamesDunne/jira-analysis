@@ -60,8 +60,18 @@ type PagedChangelog struct {
 	Histories  []History `json:"histories"`
 }
 
+//type IssueStatus struct {
+//	Name string `json:"name"`
+//}
+
 type IssueFields struct {
-	Summary string `json:"summary"`
+	Summary  string         `json:"summary"`
+	//Status   IssueStatus    `json:"status"`
+	//Updated  zonedTimestamp `json:"updated"`
+	//Assignee User           `json:"assignee"`
+
+	// NOTE: this custom field name might vary by deployment?
+	EpicName string         `json:"customfield_12024"`
 }
 
 type Issue struct {
@@ -301,26 +311,26 @@ func main() {
 
 	// Discover latest status per issue:
 	aging := make(map[string][]*Issue)
-issue:
 	for i := range issues {
 		issue := &issues[i]
 
-		issue.Status = ""
+		if issue.Fields.EpicName != "" {
+			continue
+		}
+
 		issue.StatusTime = time.Unix(0, 0)
 
 		for _, history := range issue.Changelog.Histories {
 			for _, item := range history.Items {
-				if item.Field == "Epic Name" {
-					// Skip this issue since it is an epic:
-					continue issue
-				}
 				// Ignore any fields except status changes:
 				if item.Field != "status" {
 					continue
 				}
 
 				issue.Status = item.ToString
-				issue.StatusTime = history.Created.Time
+				if item.ToString == "In Progress" {
+					issue.StatusTime = history.Created.Time
+				}
 				issue.Assigned = history.Author
 			}
 		}
