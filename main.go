@@ -10,12 +10,22 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
+
+func getEnvInt(key string, defaultValue int) int {
+	tmpValue, err := strconv.Atoi(os.Getenv(key))
+	if err != nil {
+		return defaultValue
+	}
+
+	return tmpValue
+}
 
 type zonedTimestamp struct {
 	time.Time
@@ -204,7 +214,10 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 func main() {
 	args := os.Args[1:]
 
-	boardId := 2924
+	//boardId := 2924
+	//boardId := 3612
+	boardId := getEnvInt("JIRA_BOARDID", 3581)
+
 	if len(args) >= 1 {
 		intValue, err := strconv.Atoi(args[0])
 		if err == nil {
@@ -214,6 +227,11 @@ func main() {
 
 	if os.Getenv("JIRA_URL") == "" {
 		os.Setenv("JIRA_URL", "https://ultidev")
+	}
+
+	jql := os.Getenv("JIRA_JQL")
+	if jql == "" {
+		jql = `status not in (closed, canceled, open, reopened, Analysis, "Analysis - 1")`
 	}
 
 	cl := &http.Client{
@@ -231,7 +249,13 @@ func main() {
 		cacheFilename := fmt.Sprintf("board.%d.issue.%d.json", boardId, startAt)
 
 		jiraUrl := os.ExpandEnv("$JIRA_URL/rest/agile/1.0/board")
-		url := fmt.Sprintf("%s/%d/issue?expand=changelog&startAt=%d", jiraUrl, boardId, startAt)
+		url := fmt.Sprintf(
+			"%s/%d/issue?expand=changelog&startAt=%d&jql=%s",
+			jiraUrl,
+			boardId,
+			startAt,
+			url.QueryEscape(jql),
+		)
 
 		// Fetch from cache or network:
 		issuesJsonBody, err := cachedGet(cacheFilename, url, cl)
