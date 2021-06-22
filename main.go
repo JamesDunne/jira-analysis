@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/pkg/errors"
 	"io"
 	"io/ioutil"
 	"log"
@@ -74,13 +73,13 @@ type PagedChangelog struct {
 //}
 
 type IssueFields struct {
-	Summary  string         `json:"summary"`
+	Summary string `json:"summary"`
 	//Status   IssueStatus    `json:"status"`
 	//Updated  zonedTimestamp `json:"updated"`
 	//Assignee User           `json:"assignee"`
 
 	// NOTE: this custom field name might vary by deployment?
-	EpicName string         `json:"customfield_12024"`
+	EpicName string `json:"customfield_12024"`
 }
 
 type Issue struct {
@@ -123,13 +122,17 @@ func (issues IssueList) Swap(i, j int) {
 func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBody io.ReadCloser, err error) {
 	log.Printf("GET '%s'\n", url)
 
-	stat, statErr := os.Stat(cacheFilename)
+	cacheHit := false
+	cacheAvailable := false
+	if getEnvInt("JIRA_NOCACHE", 0) == 0 {
+		stat, statErr := os.Stat(cacheFilename)
 
-	cacheHit := statErr == nil || !os.IsNotExist(statErr)
-	cacheAvailable := cacheHit
-	if cacheHit && stat != nil {
-		if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
-			cacheHit = false
+		cacheHit = statErr == nil || !os.IsNotExist(statErr)
+		cacheAvailable = cacheHit
+		if cacheHit && stat != nil {
+			if stat.ModTime().Before(time.Now().Add(-time.Hour)) {
+				cacheHit = false
+			}
 		}
 	}
 
@@ -162,7 +165,7 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 		if err != nil {
 			log.Fatal(err)
 		}
-		req.SetBasicAuth(os.ExpandEnv("$JIRA_USERNAME"), os.ExpandEnv("$JIRA_PASSWORD"))
+		req.SetBasicAuth(os.Getenv("JIRA_USERNAME"), os.Getenv("JIRA_PASSWORD"))
 
 		var rsp *http.Response
 		rsp, err = cl.Do(req)
@@ -185,7 +188,7 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 				return issuesJsonBody, nil
 			}
 
-			httpErr := errors.Errorf("HTTP response %s", rsp.Status)
+			httpErr := fmt.Errorf("HTTP response %s", rsp.Status)
 			return nil, httpErr
 		}
 
@@ -212,11 +215,22 @@ func cachedGet(cacheFilename string, url string, cl *http.Client) (issuesJsonBod
 }
 
 func main() {
+	fmt.Println(`environment variables:
+JIRA_URL      = base URL of JIRA website without trailing slash
+JIRA_USERNAME = username to authenticate with
+JIRA_PASSWORD = password to authenticate with
+
+JIRA_BOARDID  = board ID to query status of
+JIRA_JQL      = custom JQL filter to apply; default='status not in (closed, canceled, open, reopened, Analysis, "Analysis - 1")'
+`)
 	args := os.Args[1:]
 
 	//boardId := 2924
 	//boardId := 3612
-	boardId := getEnvInt("JIRA_BOARDID", 3581)
+	//boardId := 3581
+	//boardId := 4085
+	//boardId := 4454
+	boardId := getEnvInt("JIRA_BOARDID", 4454)
 
 	if len(args) >= 1 {
 		intValue, err := strconv.Atoi(args[0])
@@ -315,9 +329,9 @@ func main() {
 		if issue.Status == "" {
 			continue
 		}
-		if issue.Status == "Open" || issue.Status == "Reopened" || issue.Status == "Closed" {
-			continue
-		}
+		//if issue.Status == "Open" || issue.Status == "Reopened" || issue.Status == "Closed" {
+		//	continue
+		//}
 
 		// Determine age in business days:
 		issue.StatusBusinessDays = DateOf(issue.StatusTime).BusinessDaysUntil(today)
@@ -326,13 +340,13 @@ func main() {
 		aging[issue.Status] = append(aging[issue.Status], issue)
 	}
 
-	keys := []string{
-		"In Progress",     // In Development
-		"In Progress - 1", // PR
-		"In Progress - 2", // Ready for QA
-		"In Testing",      // In Testing
-		//"Approved",
-	}
+	//keys := []string{
+	//	"In Progress",     // In Development
+	//	"In Progress - 1", // PR
+	//	"In Progress - 2", // Ready for QA
+	//	"In Testing",      // In Testing
+	//	//"Approved",
+	//}
 	names := map[string]string{
 		"In Progress":     "In Development",
 		"In Progress - 1": "PR",
@@ -340,17 +354,31 @@ func main() {
 		"In Testing":      "In Testing",
 	}
 
+	keys := make([]string, 0, len(aging))
+	for key := range aging {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	timeLayout := "Mon Jan 02"
 	fmt.Printf("Now: %s\n", now.Format(timeLayout))
 	for _, status := range keys {
+		// sort issues by time descending:
 		statusIssues := IssueList(aging[status])
 		sort.Sort(statusIssues)
 
-		fmt.Printf("%s: [\n", names[status])
+		friendlyName, ok := names[status]
+		if ok {
+			friendlyName = fmt.Sprintf(" (%s)", friendlyName)
+		}
+		fmt.Printf("%s%s: [\n", status, friendlyName)
 		for _, issue := range statusIssues {
+			//jb, _ := json.Marshal(issue)
+			//fmt.Printf("%s\n", string(jb))
+
 			time.Now().Sub(issue.StatusTime)
 			fmt.Printf(
-				"  %12s: %s (%2d days old since %s); %s\n",
+				"  %20s: %s (%2d days old since %s); %s\n",
 				issue.Assigned.UserName,
 				issue.Key,
 				issue.StatusBusinessDays,
